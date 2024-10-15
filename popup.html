@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>VoiceNavigator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 10px;
+        }
+
+        #status {
+            margin-top: 10px;
+        }
+
+        button {
+            margin-right: 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>VoiceNavigator</h1>
+    <input type="password" id="api-key" placeholder="Enter OpenAI API Key">
+    <button id="save-key-btn">Save API Key</button>
+    <br><br>
+    <button id="start-btn">Start Listening</button>
+    <button id="stop-btn" disabled>Stop Listening</button>
+    <p id="status">Click "Start Listening" to begin.</p>
+    <script src="popup.js"></script>
+</body>
+
+</html>
