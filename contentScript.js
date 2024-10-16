@@ -1,9 +1,6 @@
-// contentScript.js
-
 let recognition;
 let isListening = false;
 let elements = [];
-let pageStructure = {};
 
 // Listen for messages from the background script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -42,7 +39,7 @@ function startListening() {
   };
 
   recognition.start();
-  extractPageStructure();
+  extractElements();
 }
 
 function stopListening() {
@@ -51,71 +48,49 @@ function stopListening() {
   recognition.stop();
 }
 
-function extractPageStructure() {
-  pageStructure = createNodeStructure(document.body);
-}
-
-function createNodeStructure(node, depth = 0) {
-  if (depth > 10) return null; // Limit depth to prevent infinite recursion
-
-  let structure = {
-    tag: node.tagName.toLowerCase(),
-    id: node.id,
-    classes: Array.from(node.classList),
-    text: node.textContent.trim(),
-    children: [],
-    actionable: isActionable(node),
-  };
-
-  if (structure.actionable) {
-    structure.index = elements.length;
-    elements.push({
-      index: elements.length,
-      element: node,
-      text: structure.text,
-      tagName: structure.tag,
-      attributes: {
-        id: structure.id,
-        classes: structure.classes.join(" "),
-        name: node.getAttribute("name"),
-        type: node.getAttribute("type"),
-        placeholder: node.getAttribute("placeholder"),
-        title: node.getAttribute("title"),
-      },
-    });
-  }
-
-  for (let child of node.children) {
-    const childStructure = createNodeStructure(child, depth + 1);
-    if (childStructure) {
-      structure.children.push(childStructure);
-    }
-  }
-
-  return structure;
-}
-
-function isActionable(node) {
-  const actionableTags = ["a", "button", "input", "select", "textarea"];
-  return (
-    actionableTags.includes(node.tagName.toLowerCase()) ||
-    node.getAttribute("role") === "button" ||
-    node.hasAttribute("onclick")
+function extractElements() {
+  const actionableElements = document.querySelectorAll(
+    'a, button, input, select, textarea, [role="button"], [onclick]'
   );
+  actionableElements.forEach((el, index) => {
+    const bounding = el.getBoundingClientRect();
+    if (bounding.width > 0 && bounding.height > 0) {
+      elements.push({
+        index,
+        element: el,
+        text: (
+          el.innerText ||
+          el.value ||
+          el.getAttribute("aria-label") ||
+          el.getAttribute("alt") ||
+          ""
+        ).trim(),
+        tagName: el.tagName.toLowerCase(),
+        attributes: {
+          id: el.id,
+          classes: el.className,
+          name: el.getAttribute("name"),
+          type: el.getAttribute("type"),
+          placeholder: el.getAttribute("placeholder"),
+          title: el.getAttribute("title"),
+        },
+      });
+    }
+  });
 }
 
 // Observe DOM changes to update elements
 const observer = new MutationObserver(() => {
-  extractPageStructure();
+  extractElements();
 });
 observer.observe(document.body, { childList: true, subtree: true });
 
 // Handle user commands and NLU
 async function handleUserCommand(command) {
   console.log("Command:", command);
-  extractPageStructure();
-  console.log("Page Structure:", pageStructure);
-  const prompt = await generatePrompt(command, pageStructure);
+  extractElements();
+  console.log("Elements:", elements);
+  const prompt = await generatePrompt(command, elements);
   const response = await getLLMResponse(prompt);
   const actions = parseLLMResponse(response);
   console.log("Prompt:", prompt);
@@ -124,15 +99,11 @@ async function handleUserCommand(command) {
 
   if (actions && actions.length > 0) {
     for (const action of actions) {
-      const { targetPath, actionType, textToInput } = action;
-      if (targetPath && actionType) {
-        const targetElement = document.querySelector(targetPath);
+      const { targetIndex, actionType, textToInput } = action;
+      if (targetIndex && actionType) {
+        const targetElement = elements[targetIndex].element;
         if (targetElement) {
-          await performAction(
-            { element: targetElement },
-            actionType,
-            textToInput
-          );
+          await performAction(targetElement, actionType, textToInput);
         }
       }
     }
@@ -141,26 +112,28 @@ async function handleUserCommand(command) {
   }
 }
 
-async function generatePrompt(command, pageStructure) {
-  const structureDescription = JSON.stringify(pageStructure, null, 2);
+async function generatePrompt(command, elements) {
+  const structureDescription = JSON.stringify(elements);
 
   return `
 User Command: "${command}"
 
 Page Structure:
-${structureDescription}
+    ${structureDescription}
 
 Instructions:
 - Analyze the page structure and the user's command.
-- Identify the sequence of actions needed to fulfill the user's intent, considering the hierarchical structure of the page.
-- For each action, provide the path to the target element (e.g., "body > div.container > button.submit"), the action to perform (e.g., "click", "input", "scroll"), and any necessary input text.
-- Provide the answer as a JSON array of actions without any additional text:
+- Identify the actions needed to fulfill the user's intent.
+- For each action, provide:
+  1. "targetPath": The CSS selector path to the target element
+  2. "actionType": The action to perform ("click", "input", "submit", or "scroll")
+  3. "textToInput": Any text to input (for "input" actions)
+- Respond with a JSON array of actions, without any additional text:
 [
-  {"targetPath": "path1", "actionType": "actionType1", "textToInput": "textToInput1"},
-  {"targetPath": "path2", "actionType": "actionType2", "textToInput": "textToInput2"},
-  ...
+  {"targetIndex": "index1", "actionType": "actionType1", "textToInput": "textToInput1"},
+  {"targetIndex": "index2", "actionType": "actionType2", "textToInput": "textToInput2"}
 ]
-  `;
+`;
 }
 
 async function getLLMResponse(prompt) {
@@ -181,7 +154,7 @@ async function getLLMResponse(prompt) {
       body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 150,
+        max_tokens: 500,
         n: 1,
         stop: null,
         temperature: 0.7,
@@ -206,8 +179,8 @@ function parseLLMResponse(response) {
 }
 
 async function performAction(targetElementData, actionType, textToInput) {
-  const el = targetElementData.element;
-
+  const el = targetElementData;
+  console.log("Performing action:", actionType, "on element:", el);
   switch (actionType.toLowerCase()) {
     case "click":
       await scrollIntoView(el);
